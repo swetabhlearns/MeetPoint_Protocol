@@ -1,7 +1,8 @@
-import React, { useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
-import ViewShot, { captureRef } from 'react-native-view-shot';
+import { colors, fonts, spacing } from '@/constants/theme';
 import * as Sharing from 'expo-sharing';
+import React, { useMemo, useRef } from 'react';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import ViewShot, { captureRef } from 'react-native-view-shot';
 
 interface VenueTicketProps {
     venueName: string;
@@ -10,8 +11,41 @@ interface VenueTicketProps {
     mapLink: string;
 }
 
+// Simple hash function for deterministic barcode
+function hashString(str: string): number {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+        const char = str.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash; // Convert to 32bit integer
+    }
+    return Math.abs(hash);
+}
+
+// Generate deterministic barcode pattern based on venue name
+function generateBarcodePattern(venueName: string): { width: number; opacity: number }[] {
+    const hash = hashString(venueName);
+    const pattern: { width: number; opacity: number }[] = [];
+
+    for (let i = 0; i < 20; i++) {
+        // Use hash bits to determine width and opacity
+        const bit1 = (hash >> (i * 2)) & 1;
+        const bit2 = (hash >> (i * 2 + 1)) & 1;
+
+        pattern.push({
+            width: bit1 ? 4 : 2,
+            opacity: bit2 ? 1 : 0.5,
+        });
+    }
+
+    return pattern;
+}
+
 export default function VenueTicket({ venueName, time, address, mapLink }: VenueTicketProps) {
     const viewShotRef = useRef<ViewShot>(null);
+
+    // Generate deterministic barcode pattern
+    const barcodePattern = useMemo(() => generateBarcodePattern(venueName), [venueName]);
 
     const shareTicket = async () => {
         try {
@@ -58,13 +92,12 @@ export default function VenueTicket({ venueName, time, address, mapLink }: Venue
                     </View>
 
                     <View style={styles.barcodeStrip}>
-                        {/* Decorative barcode-like elements */}
-                        {Array.from({ length: 20 }).map((_, i) => (
+                        {barcodePattern.map((bar, i) => (
                             <View
                                 key={i}
                                 style={[
                                     styles.barcodeLine,
-                                    { width: Math.random() > 0.5 ? 2 : 4, opacity: Math.random() > 0.3 ? 1 : 0.5 }
+                                    { width: bar.width, opacity: bar.opacity }
                                 ]}
                             />
                         ))}
@@ -83,53 +116,53 @@ const styles = StyleSheet.create({
     container: {
         alignItems: 'center',
         justifyContent: 'center',
-        padding: 20,
+        padding: spacing.xl,
     },
     ticket: {
-        backgroundColor: '#121212', // Card Surface
+        backgroundColor: colors.surface,
         width: 300,
-        padding: 24,
-        borderRadius: 0, // Sharp corners
+        padding: spacing.xxl,
+        borderRadius: 0,
         borderWidth: 1,
-        borderColor: '#333',
+        borderColor: colors.border,
     },
     header: {
         flexDirection: 'row',
         alignItems: 'center',
-        marginBottom: 32,
+        marginBottom: spacing.xxxl,
     },
     brand: {
-        color: '#EAEAEA',
-        fontFamily: 'JetBrainsMono_700Bold',
+        color: colors.textPrimary,
+        fontFamily: fonts.monoBold,
         fontSize: 12,
         letterSpacing: 2,
     },
     dot: {
         width: 4,
         height: 4,
-        backgroundColor: '#E07A5F', // Accent Warm
-        marginHorizontal: 8,
+        backgroundColor: colors.accent,
+        marginHorizontal: spacing.sm,
     },
     protocol: {
-        color: '#666',
-        fontFamily: 'JetBrainsMono_400Regular',
+        color: colors.textSecondary,
+        fontFamily: fonts.monoRegular,
         fontSize: 12,
         letterSpacing: 2,
     },
     content: {
-        gap: 24,
+        gap: spacing.xxl,
     },
     venueName: {
-        color: '#EAEAEA',
-        fontFamily: 'PlayfairDisplay_700Bold_Italic',
+        color: colors.textPrimary,
+        fontFamily: fonts.displayBoldItalic,
         fontSize: 32,
         lineHeight: 36,
     },
     details: {
-        gap: 16,
+        gap: spacing.lg,
         borderTopWidth: 1,
-        borderTopColor: '#333',
-        paddingTop: 16,
+        borderTopColor: colors.border,
+        paddingTop: spacing.lg,
     },
     row: {
         flexDirection: 'row',
@@ -137,14 +170,14 @@ const styles = StyleSheet.create({
         alignItems: 'flex-start',
     },
     label: {
-        color: '#666',
-        fontFamily: 'JetBrainsMono_400Regular',
+        color: colors.textSecondary,
+        fontFamily: fonts.monoRegular,
         fontSize: 10,
         textTransform: 'uppercase',
     },
     valueMono: {
-        color: '#E07A5F',
-        fontFamily: 'JetBrainsMono_400Regular',
+        color: colors.accent,
+        fontFamily: fonts.monoRegular,
         fontSize: 12,
         textAlign: 'right',
         maxWidth: '70%',
@@ -153,25 +186,25 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         justifyContent: 'space-between',
         height: 24,
-        marginTop: 16,
+        marginTop: spacing.lg,
         alignItems: 'flex-end',
     },
     barcodeLine: {
-        backgroundColor: '#333',
+        backgroundColor: colors.border,
         height: '100%',
     },
     button: {
-        marginTop: 20,
-        backgroundColor: '#EeaeAe', // Muted text or accent
-        paddingVertical: 12,
-        paddingHorizontal: 24,
+        marginTop: spacing.xl,
+        backgroundColor: colors.textPrimary,
+        paddingVertical: spacing.md,
+        paddingHorizontal: spacing.xxl,
         borderRadius: 0,
         borderWidth: 1,
-        borderColor: '#EeaeAe',
+        borderColor: colors.textPrimary,
     },
     buttonText: {
-        fontFamily: 'JetBrainsMono_700Bold',
+        fontFamily: fonts.monoBold,
         fontSize: 12,
-        color: '#121212',
+        color: colors.surface,
     },
 });

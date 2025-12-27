@@ -1,5 +1,5 @@
+import { Venue } from '@/services/hybridVenues';
 import { supabase } from '@/utils/supabase';
-import { Venue } from '@/services/overpass';
 
 export interface DateRecord {
     id: string;

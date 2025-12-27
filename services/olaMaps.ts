@@ -123,12 +123,16 @@ export async function searchOlaMapsNearby(
         console.log(`✅ Found ${places.length} raw results`);
 
         // Check if places have geometry. If not, we MUST geocode them.
-        const placesWithGeometry = await Promise.all(places.map(async (place: any) => {
-            if (place.geometry && place.geometry.location) {
-                return place;
-            }
+        // OPTIMIZATION: Only enrich the first 10 venues to avoid N+1 API calls
+        const MAX_ENRICHMENT = 10;
+        const placesNeedingEnrichment = places.filter((p: any) => !p.geometry?.location);
+        const placesWithGeometry = places.filter((p: any) => p.geometry?.location);
 
-            // Enrich with details
+        console.log(`📍 ${placesWithGeometry.length} places have geometry, ${placesNeedingEnrichment.length} need enrichment`);
+
+        // Only enrich the first MAX_ENRICHMENT venues that need it
+        const toEnrich = placesNeedingEnrichment.slice(0, MAX_ENRICHMENT);
+        const enrichedPlaces = await Promise.all(toEnrich.map(async (place: any) => {
             if (place.place_id) {
                 const details = await getOlaPlaceDetails(place.place_id);
                 if (details) {
@@ -148,8 +152,11 @@ export async function searchOlaMapsNearby(
             return null;
         }));
 
+        // Combine places that already had geometry with newly enriched ones
+        const allEnriched = [...placesWithGeometry, ...enrichedPlaces];
+
         // Filter out failures
-        const validPlaces = placesWithGeometry.filter((p: any) => p !== null);
+        const validPlaces = allEnriched.filter((p: any) => p !== null);
         console.log(`✅ ${validPlaces.length} venues enriched with geometry`);
 
         return validPlaces;
@@ -175,7 +182,7 @@ export const OLA_PLACE_TYPES = {
  * Get type filter based on user preferences
  */
 export function getOlaPlaceTypes(filters?: {
-    types?: ('cafe' | 'bar' | 'restaurant' | 'pub' | 'park')[];
+    types?: ('cafe' | 'bar' | 'restaurant' | 'pub')[];
 }): string {
     // Ola Maps only accepts single type, so prioritize restaurant
     if (!filters?.types || filters.types.length === 0) {

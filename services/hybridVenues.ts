@@ -1,7 +1,22 @@
-import { Venue } from './overpass';
-import { searchOlaMapsNearby, OlaPlace, getOlaPlaceTypes } from './olaMaps';
 import { scoreVenue } from '@/utils/ScoreVenue';
+import { searchOlaMapsNearby } from './olaMaps';
 
+// Types - moved from overpass.ts
+export interface Venue {
+  id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  tags: Record<string, string>;
+  score: number;
+  aiRecommended?: boolean;
+}
+
+export interface VenueFilters {
+  types?: ('cafe' | 'bar' | 'restaurant' | 'pub')[];
+  diet?: 'any' | 'vegetarian' | 'vegan';
+  vibe?: ('date' | 'work' | 'rooftop' | 'chill' | 'party')[];
+}
 /**
  * Convert Ola Maps place to standard Venue format
  */
@@ -61,6 +76,7 @@ function olaPlaceToVenue(
       rating: olaPlace.rating?.toString() || '',
       user_ratings_total: olaPlace.user_ratings_total?.toString() || '',
       open_now: olaPlace.opening_hours?.open_now ? 'yes' : 'no',
+      website: olaPlace.website || olaPlace.url || '', // Zomato/website link
     },
     score: 0,
     aiRecommended: false,
@@ -96,9 +112,9 @@ export async function fetchOlaMapsVenues(
   midpoint: { latitude: number; longitude: number },
   userLocation: { latitude: number; longitude: number },
   filters?: {
-    types?: ('cafe' | 'bar' | 'restaurant' | 'pub' | 'park')[];
+    types?: ('cafe' | 'bar' | 'restaurant' | 'pub')[];
     diet?: 'any' | 'vegetarian' | 'vegan';
-    vibe?: ('aesthetic' | 'cozy' | 'upscale' | 'casual')[];
+    vibe?: ('date' | 'work' | 'rooftop' | 'chill' | 'party')[];
   }
 ): Promise<Venue[]> {
   try {
@@ -106,8 +122,6 @@ export async function fetchOlaMapsVenues(
 
     // Search multiple categories in parallel to get more results
     const categories = ['restaurant', 'cafe', 'bar'];
-    // Add 'park' if explicitly requested
-    if (filters?.types?.includes('park')) categories.push('park');
 
     console.log(`Searching categories: ${categories.join(', ')}`);
 
@@ -152,12 +166,137 @@ export async function fetchOlaMapsVenues(
 
     console.log(`✅ Converted ${convertedVenues.length} Ola Maps venues`);
 
-    // Sort by score
-    convertedVenues.sort((a, b) => b.score - a.score);
-
     return convertedVenues;
   } catch (error) {
     console.error('Ola Maps venue fetch failed:', error);
     return [];
+  }
+}
+
+/**
+ * Fetch venues along the route between two locations
+ * Searches at multiple points along the actual travel path
+ */
+export async function fetchVenuesAlongRoute(
+  origin: { latitude: number; longitude: number },
+  destination: { latitude: number; longitude: number },
+  userLocation: { latitude: number; longitude: number },
+  filters?: {
+    types?: ('cafe' | 'bar' | 'restaurant' | 'pub')[];
+    diet?: 'any' | 'vegetarian' | 'vegan';
+    vibe?: ('date' | 'work' | 'rooftop' | 'chill' | 'party')[];
+  }
+): Promise<{ venues: Venue[]; routePoints: { latitude: number; longitude: number }[] }> {
+  try {
+    console.log('🛣️ [1] Starting route-based venue search');
+    console.log('🛣️ [2] Origin:', origin);
+    console.log('🛣️ [3] Destination:', destination);
+
+    // Dynamic import INSIDE try-catch
+    let routingModule;
+    try {
+      routingModule = await import('./routing');
+      console.log('🛣️ [4] Routing module loaded successfully');
+    } catch (importError) {
+      console.error('🛣️ [ERROR] Failed to import routing module:', importError);
+      throw new Error('Failed to load routing module');
+    }
+
+    const { getRouteBetweenLocations, samplePointsAlongRoute, distanceToRoute } = routingModule;
+
+    // Step 1: Get the actual route between locations
+    console.log('🛣️ [5] Calling getRouteBetweenLocations...');
+    const route = await getRouteBetweenLocations(origin, destination);
+    console.log('🛣️ [6] Route result:', route ? 'Found' : 'Not found');
+
+    if (!route || !route.points || route.points.length === 0) {
+      console.log('⚠️ [7] No route found, falling back to midpoint search');
+      const midpoint = {
+        latitude: (origin.latitude + destination.latitude) / 2,
+        longitude: (origin.longitude + destination.longitude) / 2,
+      };
+      const venues = await fetchOlaMapsVenues(midpoint, userLocation, filters);
+      return { venues, routePoints: [origin, midpoint, destination] };
+    }
+
+    console.log(`🛣️ [7] Route has ${route.points.length} points`);
+
+    // Step 2: Sample 5 points evenly along the route
+    const samplePoints = samplePointsAlongRoute(route.points, 5);
+    console.log(`📍 [8] Sampling venues at ${samplePoints.length} points along route`);
+
+    // Step 3: Search for venues at each sample point
+    const categories = ['restaurant', 'cafe', 'bar'];
+
+    const allVenues: Venue[] = [];
+    const seenIds = new Set<string>();
+
+    // Search at each sample point
+    for (let i = 0; i < samplePoints.length; i++) {
+      const point = samplePoints[i];
+      console.log(`🔍 [9.${i}] Searching at point ${i}: ${point.latitude}, ${point.longitude}`);
+
+      try {
+        const searchPromises = categories.map(cat =>
+          searchOlaMapsNearby(
+            point.latitude,
+            point.longitude,
+            3000,
+            cat
+          )
+        );
+
+        const results = await Promise.all(searchPromises);
+        const places = results.flat();
+        console.log(`🔍 [9.${i}] Found ${places.length} places at point ${i}`);
+
+        // Convert and deduplicate
+        const unwantedTypes = ['school', 'university', 'college', 'hospital', 'lodging', 'finance', 'post_office'];
+
+        for (const p of places) {
+          if (!p || !p.place_id || seenIds.has(p.place_id)) continue;
+          if (p.types && p.types.some((t: string) => unwantedTypes.includes(t))) continue;
+
+          seenIds.add(p.place_id);
+
+          const venue = olaPlaceToVenue(p, userLocation, filters);
+
+          // Add route proximity bonus
+          if (venue.latitude && venue.longitude) {
+            const distToRoute = distanceToRoute(
+              { latitude: venue.latitude, longitude: venue.longitude },
+              route.points
+            );
+
+            if (distToRoute < 500) {
+              venue.score += 15;
+              venue.tags.route_proximity = 'on route';
+            } else if (distToRoute < 1000) {
+              venue.score += 10;
+              venue.tags.route_proximity = 'near route';
+            } else if (distToRoute < 2000) {
+              venue.score += 5;
+              venue.tags.route_proximity = 'accessible';
+            }
+          }
+
+          allVenues.push(venue);
+        }
+      } catch (pointError) {
+        console.error(`🔍 [9.${i}] Error at point ${i}:`, pointError);
+        // Continue to next point
+      }
+    }
+
+    console.log(`✅ [10] Found ${allVenues.length} unique venues along route`);
+
+    // Sort by score
+    allVenues.sort((a, b) => b.score - a.score);
+
+    return { venues: allVenues, routePoints: route.points };
+  } catch (error) {
+    console.error('🛣️ [ERROR] Route-based venue fetch failed:', error);
+    // Return empty but don't crash
+    return { venues: [], routePoints: [] };
   }
 }

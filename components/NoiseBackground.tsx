@@ -1,21 +1,23 @@
+import { Canvas, FractalNoise, Rect } from '@shopify/react-native-skia';
 import React from 'react';
-import { StyleSheet, ViewStyle } from 'react-native';
-import { Canvas, Rect, FractalNoise } from '@shopify/react-native-skia';
+import { StyleSheet, useWindowDimensions } from 'react-native';
 
 interface NoiseBackgroundProps {
     children?: React.ReactNode;
-    style?: ViewStyle;
 }
 
-export default function NoiseBackground({ children, style }: NoiseBackgroundProps) {
+export default function NoiseBackground({ children }: NoiseBackgroundProps) {
+    // Use actual screen dimensions instead of hardcoded 10000x10000
+    const { width, height } = useWindowDimensions();
+
     return (
         <React.Fragment>
             <Canvas style={StyleSheet.absoluteFill} pointerEvents="none">
-                <Rect x={0} y={0} width={10000} height={10000}>
+                <Rect x={0} y={0} width={width} height={height}>
                     <FractalNoise freqX={0.8} freqY={0.8} octaves={4} seed={1} />
                 </Rect>
                 {/* Dark overlay to blend the noise */}
-                <Rect x={0} y={0} width={10000} height={10000} color="#050505" opacity={0.92} />
+                <Rect x={0} y={0} width={width} height={height} color="#050505" opacity={0.92} />
             </Canvas>
             {children}
         </React.Fragment>

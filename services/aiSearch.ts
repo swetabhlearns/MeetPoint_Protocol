@@ -4,7 +4,7 @@ const groq = new Groq({ apiKey: process.env.EXPO_PUBLIC_GROQ_API_KEY, dangerousl
 
 export interface AISearchResult {
     theirLocationName: string | null;
-    venueTypes: ('cafe' | 'bar' | 'restaurant' | 'pub' | 'park')[];
+    venueTypes: ('cafe' | 'bar' | 'restaurant' | 'pub')[];
     vibe: ('aesthetic' | 'cozy' | 'upscale' | 'casual')[];
     diet: 'any' | 'vegetarian' | 'vegan';
     searchMode: 'midpoint' | 'closer_to_me' | 'closer_to_them';

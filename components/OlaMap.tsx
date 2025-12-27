@@ -1,26 +1,31 @@
-import React, { useRef, useEffect } from 'react';
-import { View, StyleSheet, ActivityIndicator } from 'react-native';
+import { colors } from '@/constants/theme';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { WebView } from 'react-native-webview';
+
+interface Marker {
+  id: string;
+  latitude: number;
+  longitude: number;
+  title: string;
+  description?: string;
+  color?: string;
+}
 
 interface OlaMapProps {
   latitude: number;
   longitude: number;
-  markers?: {
-    id: string;
-    latitude: number;
-    longitude: number;
-    title: string;
-    description?: string;
-    color?: string;
-  }[];
+  markers?: Marker[];
   height?: number | string;
 }
 
 export default function OlaMap({ latitude, longitude, markers = [], height = '100%' }: OlaMapProps) {
   const webViewRef = useRef<WebView>(null);
   const apiKey = process.env.EXPO_PUBLIC_OLA_MAPS_API_KEY || '';
+  const isInitialized = useRef(false);
 
-  const htmlContent = `
+  // Memoize the initial HTML to prevent unnecessary re-renders
+  const htmlContent = useMemo(() => `
     <!DOCTYPE html>
     <html>
       <head>
@@ -47,67 +52,153 @@ export default function OlaMap({ latitude, longitude, markers = [], height = '10
       <body>
         <div id="map"></div>
         <script>
-          const map = new maplibregl.Map({
-            container: 'map',
-            style: 'https://api.olamaps.io/styleEditor/v1/styleEdit/styles/5477cffd-10a3-4d29-a18a-6df86b44052b/midway?api_key=${apiKey}',
-            center: [${longitude}, ${latitude}],
-            zoom: 14,
-            attributionControl: false,
-            transformRequest: (url, resourceType) => {
-              if (url.includes('olamaps.io') && !url.includes('api_key=')) {
-                return {
-                  url: url + (url.includes('?') ? '&' : '?') + 'api_key=${apiKey}'
+          let map = null;
+          let markerInstances = {};
+
+          function initMap() {
+            map = new maplibregl.Map({
+              container: 'map',
+              style: 'https://api.olamaps.io/styleEditor/v1/styleEdit/styles/5477cffd-10a3-4d29-a18a-6df86b44052b/midway?api_key=${apiKey}',
+              center: [${longitude}, ${latitude}],
+              zoom: 14,
+              attributionControl: false,
+              transformRequest: (url, resourceType) => {
+                if (url.includes('olamaps.io') && !url.includes('api_key=')) {
+                  return {
+                    url: url + (url.includes('?') ? '&' : '?') + 'api_key=${apiKey}'
+                  }
                 }
+                return { url };
               }
-              return { url };
+            });
+
+            map.addControl(new maplibregl.NavigationControl(), 'top-right');
+            
+            // Notify React Native that map is ready
+            window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'mapReady' }));
+          }
+
+          function updateMarkers(markers) {
+            // Remove old markers that are no longer in the list
+            const newIds = new Set(markers.map(m => m.id));
+            Object.keys(markerInstances).forEach(id => {
+              if (!newIds.has(id)) {
+                markerInstances[id].remove();
+                delete markerInstances[id];
+              }
+            });
+
+            // Add or update markers
+            markers.forEach(m => {
+              if (markerInstances[m.id]) {
+                // Update existing marker position
+                markerInstances[m.id].setLngLat([m.longitude, m.latitude]);
+              } else {
+                // Create new marker
+                const el = document.createElement('div');
+                el.className = 'marker';
+                if (m.color) el.style.backgroundColor = m.color;
+
+                const marker = new maplibregl.Marker(el)
+                  .setLngLat([m.longitude, m.latitude])
+                  .setPopup(new maplibregl.Popup({ offset: 25 })
+                    .setHTML('<div class="marker-popup"><b>' + m.title + '</b><br>' + (m.description || '') + '</div>'))
+                  .addTo(map);
+                
+                markerInstances[m.id] = marker;
+              }
+            });
+          }
+
+          function updateCenter(lat, lng, zoom) {
+            if (map) {
+              map.flyTo({ center: [lng, lat], zoom: zoom || 15 });
+            }
+          }
+
+          // Handle messages from React Native
+          document.addEventListener('message', function(event) {
+            try {
+              const data = JSON.parse(event.data);
+              switch(data.type) {
+                case 'updateMarkers':
+                  updateMarkers(data.markers);
+                  break;
+                case 'updateCenter':
+                  updateCenter(data.latitude, data.longitude, data.zoom);
+                  break;
+              }
+            } catch(e) {
+              console.error('Message parse error:', e);
             }
           });
 
-          map.addControl(new maplibregl.NavigationControl(), 'top-right');
-
-          // Add Markers
-          const markers = ${JSON.stringify(markers)};
-          
-          markers.forEach(m => {
-            // Create DOM element for marker
-            const el = document.createElement('div');
-            el.className = 'marker';
-            if(m.color) el.style.backgroundColor = m.color;
-
-            // Add marker to map
-            new maplibregl.Marker(el)
-              .setLngLat([m.longitude, m.latitude])
-              .setPopup(new maplibregl.Popup({ offset: 25 })
-                .setHTML('<div class="marker-popup"><b>' + m.title + '</b><br>' + (m.description || '') + '</div>'))
-              .addTo(map);
-          });
-
-          // Handle updates from React Native
+          // Also listen for window message (Android)
           window.addEventListener('message', function(event) {
-            const data = JSON.parse(event.data);
-            if (data.type === 'updateCenter') {
-               map.flyTo({ center: [data.longitude, data.latitude], zoom: 15 });
+            try {
+              const data = JSON.parse(event.data);
+              switch(data.type) {
+                case 'updateMarkers':
+                  updateMarkers(data.markers);
+                  break;
+                case 'updateCenter':
+                  updateCenter(data.latitude, data.longitude, data.zoom);
+                  break;
+              }
+            } catch(e) {
+              console.error('Message parse error:', e);
             }
           });
+
+          initMap();
         </script>
       </body>
     </html>
-  `;
+  `, [apiKey]); // Only recreate if API key changes
 
-  // Update map when center changes
-  useEffect(() => {
-    if (webViewRef.current) {
-      // We could send a message here, but simpler to just let React re-render the HTML string for now
-      // or effectively we rely on the component mount mostly.
-      // For smoother updates, message passing is better.
-      const script = `
-          if (window.map) {
-             window.map.flyTo({ center: [${longitude}, ${latitude}], zoom: 15 });
-          }
-        `;
-      webViewRef.current.injectJavaScript(script);
+  // Send marker updates via postMessage instead of re-rendering HTML
+  const sendMarkersUpdate = useCallback(() => {
+    if (webViewRef.current && isInitialized.current) {
+      webViewRef.current.postMessage(JSON.stringify({
+        type: 'updateMarkers',
+        markers,
+      }));
+    }
+  }, [markers]);
+
+  // Send center updates via postMessage
+  const sendCenterUpdate = useCallback(() => {
+    if (webViewRef.current && isInitialized.current) {
+      webViewRef.current.postMessage(JSON.stringify({
+        type: 'updateCenter',
+        latitude,
+        longitude,
+      }));
     }
   }, [latitude, longitude]);
+
+  // Update markers when they change
+  useEffect(() => {
+    sendMarkersUpdate();
+  }, [markers, sendMarkersUpdate]);
+
+  // Update center when it changes
+  useEffect(() => {
+    sendCenterUpdate();
+  }, [latitude, longitude, sendCenterUpdate]);
+
+  const handleMessage = useCallback((event: any) => {
+    try {
+      const data = JSON.parse(event.nativeEvent.data);
+      if (data.type === 'mapReady') {
+        isInitialized.current = true;
+        // Send initial markers after map is ready
+        sendMarkersUpdate();
+      }
+    } catch (e) {
+      // Ignore parse errors
+    }
+  }, [sendMarkersUpdate]);
 
   return (
     <View style={[styles.container, { height: height as any }]}>
@@ -117,10 +208,13 @@ export default function OlaMap({ latitude, longitude, markers = [], height = '10
         source={{ html: htmlContent }}
         style={styles.webview}
         scrollEnabled={false}
+        onMessage={handleMessage}
+        javaScriptEnabled={true}
+        domStorageEnabled={true}
       />
       {!apiKey && (
         <View style={styles.errorOverlay}>
-          <ActivityIndicator color="#E07A5F" />
+          <ActivityIndicator color={colors.accent} />
         </View>
       )}
     </View>
@@ -130,12 +224,12 @@ export default function OlaMap({ latitude, longitude, markers = [], height = '10
 const styles = StyleSheet.create({
   container: {
     width: '100%',
-    backgroundColor: '#050505',
+    backgroundColor: colors.background,
     overflow: 'hidden',
   },
   webview: {
     flex: 1,
-    backgroundColor: '#050505',
+    backgroundColor: colors.background,
     opacity: 0.99, // Hack to fix some android glitching
   },
   errorOverlay: {
